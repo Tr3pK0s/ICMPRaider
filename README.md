@@ -2,7 +2,7 @@
 
 ## Description/Overview
 A fully ICMP-based command-and-control (C2) capable of various ICMP types with GUI for managing multiple targets, sending commands, and exfiltrating/uploading files. 
-This project is my first open-source upload, all feedback welcome! Thankyou to the Python and infosec community!
+This project is my first open-source upload, Thankyou to the Python and infosec community that helped make it happen!
 
 ## Features
 - A broad arsenal of many ICMP types (e.g., echo, timestamp, extended echo) for testing.
