@@ -33,15 +33,15 @@ This tool is for authorized security testing, ethical red team exercises, and ed
 
 (Example using echo request/reply)
 
-Target 'sudo python3 ICMPRaiderT.py -E' 
+(Target) 'sudo python3 ICMPRaiderT.py -E' 
 
-Attacker 'sudo python3 ICMPRaiderA.py 192.168.1.100 -E'         # single target
-or
-Attacker 'sudo python3 ICMPRaiderA.py 192.168.1.100 192.168.1.200 -E'          # multi target
-or
-Attacker 'sudo python3 ICMPRaiderA.py --ipv6 2001:0db8:85a3:0000:0000:8a2e:0370:7334 -E'         #IPv6
+(Attacker) 'sudo python3 ICMPRaiderA.py 192.168.1.100 -E'          (single target)
 
-*NOTE match flags between scripts*
+(Attacker) 'sudo python3 ICMPRaiderA.py 192.168.1.100 192.168.1.200 -E'           (multi target)
+
+(Attacker) 'sudo python3 ICMPRaiderA.py --ipv6 2001:0db8:85a3:0000:0000:8a2e:0370:7334 -E'         (IPv6)
+
+*NOTE flags must match between scripts*
 
 (Example using Custom ICMP identifier flag)
 
@@ -49,19 +49,19 @@ Target 'sudo python3 ICMPRaiderT.py -E --id 0x1234'
 
 Attacker 'sudo python3 ICMPRaiderA.py 192.168.1.100 -E --id 0x1234'
 
-##ICMP type Flags
-'-E' Echo Request/Reply (types 8/0 IPv4 or 128/129 IPv6).
-'-T' Timestamp (13/14, IPv4 only).
-'-M' Address Mask (17/18, IPv4 only, modern linux kernels block).
-'-R' Information (15/16, IPv4 only).
-'-S' Router Solicitation/Advertisement (10/9 IPv4 or 133/134 IPv6).
-'-X: Experimental (253/254).
-'-N' Neighbor Solicitation/Advertisement (135/136, IPv6 only).
-'-D' Domain Name (37/38, IPv4 only).
-'-O' Mobile Registration (35/36, IPv4 only).
-'-TR' Traceroute (30/0, IPv4 only).
-'-P' Photuris (40/40, IPv4 only).
-'-EE' Extended Echo (42/43).
+## ICMP type Flags
+-E Echo Request/Reply (types 8/0 IPv4 or 128/129 IPv6).
+-T Timestamp (13/14, IPv4 only).
+-M Address Mask (17/18, IPv4 only, modern linux kernels block).
+-R Information (15/16, IPv4 only).
+-S Router Solicitation/Advertisement (10/9 IPv4 or 133/134 IPv6).
+-X Experimental (253/254).
+-N Neighbor Solicitation/Advertisement (135/136, IPv6 only).
+-D Domain Name (37/38, IPv4 only).
+-O Mobile Registration (35/36, IPv4 only).
+-TR Traceroute (30/0, IPv4 only).
+-P Photuris (40/40, IPv4 only).
+-EE Extended Echo (42/43).
 
 ## License 
 MIT License
