@@ -18,7 +18,7 @@ This project is my first open-source upload; Thankyou to the Python and infosec 
 - Tested and designed for Linux; may work on Windows/macOS with adjustments.
 
 ## Prerequisites/Requirements
-- Python 3.9+ (standard libraries only: no pip installs needed).
+- Python 3.9+ (standard libraries only; no pip installs needed).
 - Root/admin privileges (for raw sockets, use 'sudo' on Linux).
 - Tkinter (built-in on most Python installs; check with 'python3 -m tkinter').
 - Controlled lab environment (VM or liveUSB recommended for testing).
