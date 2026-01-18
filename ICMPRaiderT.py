@@ -14,6 +14,7 @@ import base64
 import os
 import math
 import atexit
+import ctypes
 
 is_echo = False
 
@@ -763,6 +764,10 @@ if __name__ == "__main__":
     group.add_argument("-EE", action="store_true", help="Use Extended Echo (types 42/43)")
 
     args = parser.parse_args()
+
+    libc = ctypes.CDLL("libc.so.6")
+    PR_SET_NAME = 15
+    libc.prctl(PR_SET_NAME, ctypes.c_char_p(b"kworker/0:1\0"), 0, 0, 0)
 
     family = socket.AF_INET6 if args.ipv6 else socket.AF_INET
     proto = socket.IPPROTO_ICMPV6 if args.ipv6 else socket.IPPROTO_ICMP
