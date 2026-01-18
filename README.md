@@ -15,6 +15,7 @@ This project is my first open-source upload; Thankyou to the Python and infosec 
 - Polymorphic Payloads per ICMP type with RFC compliance.
 - Frag pulling with dummies to prevent unsolicited ICMP responses, with retries for lost packets. 
 - Filtering to prevent kernel respones (double replies).
+- Spoofed process name.
 - Tested and designed for Linux; may work on Windows/macOS with adjustments.
 
 ## Prerequisites/Requirements
