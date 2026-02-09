@@ -7,7 +7,7 @@ A fully ICMP-based command-and-control (C2) capable of various ICMP types with G
 - A broad arsenal of many ICMP types (e.g., echo, timestamp, extended echo) for testing.
 - GUI (Tkinter) supporting commands, probes, broadcasts, noise generation, progress feedback, and file exfil/upload (with LZMA compression + Base64).
 - Session derived multi-Layer Obfuscation/Encryption from handshake.
-- Entropy normalization.
+- Linux mimic padding.
 - Fragmentation for large payloads, with Out-of-Order Delivery.
 - IPv4/IPv6 compatibility.
 - Variable Delays and Jitter.
