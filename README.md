@@ -4,7 +4,7 @@
 A fully ICMP-based command-and-control (C2) capable of various ICMP types with GUI for managing multiple targets, sending commands, and exfiltrating/uploading files. Thankyou to the Python and infosec community that helped make it happen!
 
 ## Features
-- A broad arsenal of many ICMP types (e.g., echo, timestamp, Traceroute) for testing.
+- A broad arsenal of many ICMP types (e.g., Echo, Timestamp, Traceroute) for testing.
 - GUI (Tkinter) supporting commands, probes, broadcasts, noise generation, progress feedback, and file exfil/upload (with LZMA compression + Base64).
 - Session derived multi-Layer Obfuscation/Encryption from handshake.
 - Linux mimic padding.
