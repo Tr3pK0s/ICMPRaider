@@ -12,7 +12,6 @@ import hashlib
 import lzma
 import base64
 import os
-import math
 import atexit
 import ctypes
 import signal
@@ -23,7 +22,7 @@ is_echo = False
 ICMP_ID = 0x1111
 DEFAULT_SHIFT_VALUE = 1
 DEFAULT_RAILFENCE_RAILS = 4
-DEFAULT_BIT_RAILFENCE_RAILS = 7        # Set at >=2
+DEFAULT_BIT_RAILFENCE_RAILS = 7		# Set at >=2
 HANDSHAKE_PREFIX = b"SYNC:"
 ACK_PREFIX = b"ACK:"
 PROBE_COMMAND = b"probe"  
@@ -105,20 +104,6 @@ def suppress_icmp(family):
 def unsuppress_icmp(ignore_file):
     with open(ignore_file, 'w') as f:
         f.write('0\n')
-
-def calculate_entropy(data):
-    if not data:
-        return 0.0
-    freq = [0] * 256
-    for byte in data:
-        freq[byte] += 1
-    total = len(data)
-    ent = 0.0
-    for f in freq:
-        if f > 0:
-            p = f / total
-            ent -= p * math.log2(p)
-    return ent
 
 def checksum(source_string):
     sum_val = 0
@@ -403,25 +388,6 @@ def light_decrypt(data, sub_table=None, shift=DEFAULT_SHIFT_VALUE, railfence_rai
 def ms_since_midnight():
     now = datetime.datetime.now().time()
     return now.hour * 3600000 + now.minute * 60000 + now.second * 1000 + now.microsecond // 1000
-
-extra_bytes = {
-    8: 0, 0: 0,
-    13: 12, 14: 12,
-    17: 4, 18: 4,
-    15: 0, 16: 0,
-    10: 4, 9: 8,
-    128: 0, 129: 0,
-    133: 4, 134: 12,
-    37: 0, 38: 0,
-    135: 20, 136: 20,
-    253: 0, 254: 0,
-    130: 20, 131: 20,
-    35: 0, 36: 2,
-    30: 16,  
-    40: 4,   
-    42: 6,  
-    43: 8   
-}
 
 def _get_base_dummy(icmp_type, icmp_id, icmp_sequence):
     if icmp_type in [0x11, 0x16]:
