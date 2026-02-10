@@ -12,7 +12,7 @@ A fully ICMP-based command-and-control (C2) capable of various ICMP types with G
 - IPv4/IPv6 compatibility.
 - Variable Delays and Jitter.
 - Polymorphic Payloads per ICMP type with RFC compliance.
-- Frag pulling with dummies to prevent unsolicited ICMP responses, with retries for lost packets. 
+- Frag pulling via dummies to prevent unsolicited ICMP responses, repeating until entire payload delivery.
 - Filtering to prevent kernel responses (double replies).
 - Spoofed process name.
 - Tested and designed for Linux; may work on Windows/macOS with adjustments.
