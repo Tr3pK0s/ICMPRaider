@@ -610,7 +610,7 @@ def send_probe(target_ip, req_type, icmp_id, icmp_sequence, cmd_prefix, padding_
 def check_probe_response(target_ip, rep_type, icmp_id, probe_seq, out_prefix, sub_table, shift, railfence_rails, bit_rails, family, local_ip, proto, poly_seed=None, mutation_count=3, layers=None, selected_ops=None, padding_seed=None):
     start_time = time.time()
     with socket.socket(family, socket.SOCK_RAW, proto) as sock:
-        while time.time() - start_time < 10:
+        while time.time() - start_time < 5:
             ready = select.select([sock], [], [], 1)
             if ready[0]:
                 data, addr = sock.recvfrom(2048)
