@@ -1,7 +1,7 @@
 # ICMPRaider
 
 ## Description/Overview
-A fully ICMP based C2/botnet capable of various ICMP types with both a GUI and mobile/CLI version for managing multiple targets, sending commands, and exfiltrating/uploading files. Thankyou to the Python and infosec community that helped make it happen!
+A fully ICMP based C2/botnet capable of various ICMP types with both a GUI & mobile/CLI version for managing multiple targets, sending commands, and exfiltrating/uploading files. Thankyou to the Python and infosec community that helped make it happen!
 
 ## Features
 - A broad arsenal of many ICMP types (e.g., Echo, Timestamp, Traceroute) for testing.
