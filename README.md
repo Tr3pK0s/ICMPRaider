@@ -6,7 +6,7 @@ A fully ICMP based C2/botnet capable of various ICMP types with both a GUI & mob
 ## Features
 - A broad arsenal of many ICMP types (e.g., Echo, Timestamp, Traceroute) for testing.
 - GUI or CLI supporting commands, probes, broadcasts, noise generation, progress feedback, and file exfil/upload (with LZMA compression + Base64).
-- Session derived multi-Layer Obfuscation/Encryption from handshake.
+- Session derived multi layer Obfuscation/Encryption from handshake.
 - Linux mimic padding.
 - Fragmentation for large payloads, with Out-of-Order Delivery.
 - IPv4/IPv6 compatibility.
