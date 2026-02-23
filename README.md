@@ -1,11 +1,11 @@
 # ICMPRaider
 
 ## Description/Overview
-A fully ICMP-based command-and-control (C2) capable of various ICMP types with GUI for managing multiple targets, sending commands, and exfiltrating/uploading files. Thankyou to the Python and infosec community that helped make it happen!
+A fully ICMP based C2/botnet capable of various ICMP types with both a GUI and mobile/CLI version for managing multiple targets, sending commands, and exfiltrating/uploading files. Thankyou to the Python and infosec community that helped make it happen!
 
 ## Features
 - A broad arsenal of many ICMP types (e.g., Echo, Timestamp, Traceroute) for testing.
-- GUI (Tkinter) supporting commands, probes, broadcasts, noise generation, progress feedback, and file exfil/upload (with LZMA compression + Base64).
+- GUI or CLI supporting commands, probes, broadcasts, noise generation, progress feedback, and file exfil/upload (with LZMA compression + Base64).
 - Session derived multi-Layer Obfuscation/Encryption from handshake.
 - Linux mimic padding.
 - Fragmentation for large payloads, with Out-of-Order Delivery.
@@ -15,7 +15,7 @@ A fully ICMP-based command-and-control (C2) capable of various ICMP types with G
 - Frag pulling via dummies creating solicited ICMP responses, repeating until entire payload delivery.
 - Filtering to prevent kernel responses (double replies).
 - Spoofed process name.
-- Tested and designed for Linux; may work on Windows/macOS with adjustments.
+- Tested and designed for Linux, mobile/CLI version works on Nethunter. 
 
 ## Prerequisites/Requirements
 - Python 3.9+ (standard libraries only; no pip installs needed).
@@ -52,7 +52,7 @@ Attacker 'sudo python3 ICMPRaiderA.py 192.168.1.100 -E --id 0x1234'
 ## ICMP type Flags
 -E Echo Request/Reply (types 8/0 IPv4 or 128/129 IPv6).
 -T Timestamp (13/14, IPv4 only).
--M Address Mask (17/18, IPv4 only, modern linux kernels block).
+-M Address Mask (17/18, IPv4 only).
 -R Information (15/16, IPv4 only).
 -S Router Solicitation/Advertisement (10/9 IPv4 or 133/134 IPv6).
 -X Experimental (253/254).
